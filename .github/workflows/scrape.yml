@@ -47,3 +47,11 @@ jobs:
           FB_PAGES    : ${{ secrets.FB_PAGES_REPO1 }}
           REGION      : ${{ secrets.REGION }}
         run: python scraper.py
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: /tmp/*.png
+          retention-days: 1
