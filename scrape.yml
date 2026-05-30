@@ -1,0 +1,49 @@
+name: Scrape Facebook Pages
+
+on:
+  schedule:
+    - cron: '0-59/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-playwright
+
+      - name: Install dependencies
+        run: pip install playwright httpx
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        id: pw-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-pw-chromium-v1
+
+      - name: Install Playwright Chromium
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: playwright install chromium --with-deps
+
+      - name: Install system deps
+        run: playwright install-deps chromium
+
+      - name: Run scraper
+        env:
+          LARAVEL_URL : ${{ secrets.LARAVEL_URL }}
+          IMPORT_KEY  : ${{ secrets.IMPORT_KEY }}
+          FB_COOKIES  : ${{ secrets.FB_COOKIES }}
+          FB_PAGES    : ${{ secrets.FB_PAGES_REPO1 }}
+          REGION      : ${{ secrets.REGION }}
+        run: python scraper.py
