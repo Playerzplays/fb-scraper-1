@@ -38,101 +38,100 @@ def parse_cookies() -> list:
 async def scrape_page(page, page_name: str) -> list:
     """Scrape a Facebook public page using Playwright."""
     posts = []
-    url   = f'https://www.facebook.com/{page_name}'
-    print(f'Scraping {url}...')
 
-    try:
-        await page.goto(url, wait_until='domcontentloaded', timeout=30000)
-        # Wait for feed to load
-        await page.wait_for_timeout(3000)
+    # Try m.facebook.com first — simpler DOM than www
+    for base_url in [f'https://m.facebook.com/{page_name}', f'https://www.facebook.com/{page_name}']:
+        print(f'Trying {base_url}...')
+        try:
+            await page.goto(base_url, wait_until='domcontentloaded', timeout=30000)
+            await page.wait_for_timeout(5000)
 
-        # Scroll down a bit to load more posts
-        await page.evaluate('window.scrollBy(0, 800)')
-        await page.wait_for_timeout(2000)
+            # Scroll to trigger lazy loading
+            await page.evaluate('window.scrollBy(0, 1000)')
+            await page.wait_for_timeout(3000)
 
-        # Extract posts via JavaScript evaluation
-        extracted = await page.evaluate('''() => {
-            const posts = [];
+            # Save screenshot for debugging
+            await page.screenshot(path=f'/tmp/{page_name}.png')
+            print(f'Screenshot saved for {page_name}')
 
-            // Try multiple selectors for post containers
-            const selectors = [
-                'div[data-pagelet^="FeedUnit"]',
-                'div[role="article"]',
-                'div[data-ad-preview="message"]',
-            ];
+            # Get page title
+            title = await page.title()
+            print(f'Page title: {title}')
 
-            let items = [];
-            for (const sel of selectors) {
-                items = Array.from(document.querySelectorAll(sel));
-                if (items.length > 0) break;
-            }
+            # Try to extract posts via JavaScript
+            extracted = await page.evaluate('''() => {
+                const posts = [];
+                const results = { found: [], tried: [] };
 
-            items.slice(0, 10).forEach(item => {
-                // Get text content
-                const textEl = item.querySelector('div[data-ad-comet-preview="message"]') ||
-                               item.querySelector('div[data-ad-preview="message"]') ||
-                               item.querySelector('[dir="auto"]');
-                const content = textEl ? textEl.innerText.trim() : '';
+                // Try many different selectors
+                const selectors = [
+                    // m.facebook.com selectors
+                    'article',
+                    'div[data-ft]',
+                    'div._55wo',
+                    'div._1xnd',
+                    // www.facebook.com selectors
+                    'div[data-pagelet^="FeedUnit"]',
+                    'div[role="article"]',
+                    'div[data-ad-preview="message"]',
+                    'div[data-testid="story-subtitled-story-container"]',
+                    // Generic
+                    'div[id^="u_0_"]',
+                ];
 
-                // Get image
-                const imgEl = item.querySelector('img[src*="scontent"]') ||
-                              item.querySelector('img[src*="fbcdn"]');
-                const image = imgEl ? imgEl.src : null;
-
-                // Get post URL
-                const linkEl = item.querySelector('a[href*="/posts/"]') ||
-                               item.querySelector('a[href*="/permalink/"]') ||
-                               item.querySelector('a[href*="story_fbid"]');
-                const postUrl = linkEl ? linkEl.href : '';
-
-                // Get timestamp
-                const timeEl = item.querySelector('abbr') ||
-                               item.querySelector('a[role="link"] span');
-                const timestamp = timeEl ? timeEl.getAttribute('data-utime') || timeEl.innerText : '';
-
-                // Get post ID from URL
-                let postId = '';
-                if (postUrl) {
-                    const match = postUrl.match(/\/posts\/(\d+)/) ||
-                                  postUrl.match(/story_fbid=(\d+)/) ||
-                                  postUrl.match(/permalink\/(\d+)/);
-                    postId = match ? match[1] : btoa(postUrl).slice(0, 20);
+                for (const sel of selectors) {
+                    const els = document.querySelectorAll(sel);
+                    results.tried.push(`${sel}: ${els.length}`);
+                    if (els.length > 0 && els.length < 50) {
+                        results.found.push(sel);
+                        Array.from(els).slice(0, 10).forEach(item => {
+                            const text = item.innerText ? item.innerText.trim().slice(0, 500) : '';
+                            const img  = item.querySelector('img');
+                            const link = item.querySelector('a[href*="story"]') ||
+                                         item.querySelector('a[href*="posts"]') ||
+                                         item.querySelector('a[href*="permalink"]');
+                            if (text.length > 20 || img) {
+                                posts.push({
+                                    content : text,
+                                    image   : img ? img.src : null,
+                                    postUrl : link ? link.href : '',
+                                    id      : Math.random().toString(36).slice(2),
+                                    selector: sel,
+                                });
+                            }
+                        });
+                        if (posts.length > 0) break;
+                    }
                 }
-                if (!postId && content) {
-                    postId = btoa(content.slice(0, 30)).replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
-                }
+                return { posts, debug: results };
+            }''')
 
-                if (content || image) {
-                    posts.push({ id: postId, content, image, postUrl, timestamp });
-                }
-            });
+            print(f'Selectors tried: {extracted["debug"]["tried"]}')
+            print(f'Selectors found: {extracted["debug"]["found"]}')
+            print(f'Posts extracted: {len(extracted["posts"])}')
 
-            return posts;
-        }''')
+            if extracted['posts']:
+                page_display_name = title.split('|')[0].strip() if '|' in title else page_name
+                for p in extracted['posts']:
+                    posts.append({
+                        'external_id': f'fb_{page_name}_{p["id"]}',
+                        'type'       : 'facebook',
+                        'region'     : REGION,
+                        'page_id'    : page_name,
+                        'page_name'  : page_display_name,
+                        'content'    : p['content'],
+                        'image'      : p['image'],
+                        'images'     : [p['image']] if p['image'] else [],
+                        'reactions'  : {'like': 0, 'comment': 0, 'share': 0},
+                        'post_url'   : p['postUrl'],
+                        'posted_at'  : datetime.utcnow().isoformat(),
+                    })
+                print(f'Done with {base_url} — found {len(posts)} posts')
+                break  # stop trying other URLs if we got posts
 
-        print(f'Found {len(extracted)} posts for {page_name}')
-
-        # Get page name from title
-        title = await page.title()
-        page_display_name = title.split('|')[0].strip() if '|' in title else page_name
-
-        for p in extracted:
-            posts.append({
-                'external_id': f'fb_{page_name}_{p["id"]}' if p['id'] else f'fb_{page_name}_{hash(p["content"][:30])}',
-                'type'       : 'facebook',
-                'region'     : REGION,
-                'page_id'    : page_name,
-                'page_name'  : page_display_name,
-                'content'    : p['content'],
-                'image'      : p['image'],
-                'images'     : [p['image']] if p['image'] else [],
-                'reactions'  : {'like': 0, 'comment': 0, 'share': 0},
-                'post_url'   : p['postUrl'],
-                'posted_at'  : p['timestamp'] or datetime.utcnow().isoformat(),
-            })
-
-    except Exception as e:
-        print(f'Error scraping {page_name}: {type(e).__name__}: {e}')
+        except Exception as e:
+            print(f'Error with {base_url}: {type(e).__name__}: {e}')
+            continue
 
     return posts
 
