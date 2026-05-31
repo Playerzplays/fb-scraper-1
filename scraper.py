@@ -97,6 +97,20 @@ async def scrape_page(page, page_name: str) -> list:
                 await page.evaluate('window.scrollBy(0, 800)')
                 await page.wait_for_timeout(2000)
 
+            # Click all "See more" buttons to expand truncated content
+            try:
+                see_more_buttons = page.locator('div[role="button"]:has-text("See more"), span:has-text("See more")')
+                count = await see_more_buttons.count()
+                for i in range(min(count, 10)):
+                    try:
+                        await see_more_buttons.nth(i).click(timeout=2000)
+                        await page.wait_for_timeout(500)
+                    except Exception:
+                        continue
+                print(f'Expanded {count} "See more" buttons')
+            except Exception:
+                pass
+
             # Screenshot for debugging
             await page.screenshot(path=f'/tmp/{page_name}.png')
             print(f'Screenshot saved')
@@ -114,7 +128,6 @@ async def scrape_page(page, page_name: str) -> list:
                     'div[data-pagelet^="FeedUnit"]',
                     'div[aria-posinset]',
                     'div[data-testid="post_message"]',
-                    'div[dir="auto"]',
                 ];
 
                 for (const sel of selectors) {
@@ -123,33 +136,59 @@ async def scrape_page(page, page_name: str) -> list:
                     if (els.length > 0 && els.length < 50) {
                         results.found.push(sel);
                         Array.from(els).slice(0, 10).forEach((item, idx) => {
-                            const text = item.innerText ? item.innerText.trim().slice(0, 500) : '';
-                            const img  = item.querySelector('img[src*="scontent"]') ||
-                                         item.querySelector('img[src*="fbcdn"]');
-                            const link = item.querySelector('a[href*="story"]') ||
-                                         item.querySelector('a[href*="posts"]') ||
-                                         item.querySelector('a[href*="permalink"]');
+                            const text = item.innerText ? item.innerText.trim().slice(0, 1000) : '';
 
-                            // Extract post ID from link
-                            let postId = '';
-                            if (link) {
+                            // Get actual post image — exclude emoji/icon images
+                            // Real post images have width > 100 or are from specific CDN paths
+                            let image = null;
+                            const imgs = item.querySelectorAll('img[src*="scontent"], img[src*="fbcdn"]');
+                            for (const img of imgs) {
+                                const src = img.src || '';
+                                // Skip emoji and small icon images
+                                if (src.includes('emoji') || src.includes('icon') || 
+                                    src.includes('/16/') || src.includes('/20/') ||
+                                    src.includes('/24/') || src.includes('/32/')) continue;
+                                // Prefer images with larger dimensions
+                                if (img.naturalWidth > 100 || img.width > 100 || 
+                                    src.includes('_n.') || src.includes('p720x720') ||
+                                    src.includes('p526x296') || src.includes('p480x')) {
+                                    image = src;
+                                    break;
+                                }
+                                // Accept any scontent image as fallback
+                                if (!image && src.includes('scontent')) {
+                                    image = src;
+                                }
+                            }
+
+                            // Get post URL
+                            let postUrl = '';
+                            let postId  = '';
+                            const links = item.querySelectorAll('a[href]');
+                            for (const link of links) {
                                 const href = link.href || '';
-                                const match = href.match(/story_fbid[=%](\d+)/) ||
-                                              href.match(/\/posts\/(\d+)/) ||
+                                const match = href.match(/\/posts\/(\d+)/) ||
+                                              href.match(/story_fbid[=%](\d+)/) ||
                                               href.match(/permalink\/(\d+)/);
-                                postId = match ? match[1] : '';
-                            }
-                            if (!postId) {
-                                postId = `idx_${idx}_${Date.now()}`;
+                                if (match) {
+                                    postId  = match[1];
+                                    postUrl = href;
+                                    break;
+                                }
                             }
 
-                            if (text.length > 20 || img) {
+                            // Use content hash as stable fallback ID
+                            if (!postId && text) {
+                                postId = btoa(unescape(encodeURIComponent(text.slice(0, 50)))).replace(/[^a-zA-Z0-9]/g, '').slice(0, 24);
+                            }
+                            if (!postId) postId = `idx_${idx}`;
+
+                            if (text.length > 20 || image) {
                                 posts.push({
                                     content : text,
-                                    image   : img ? img.src : null,
-                                    postUrl : link ? link.href : '',
+                                    image   : image,
+                                    postUrl : postUrl,
                                     id      : postId,
-                                    selector: sel,
                                 });
                             }
                         });
@@ -176,7 +215,7 @@ async def scrape_page(page, page_name: str) -> list:
                         'image'      : p['image'],
                         'images'     : [p['image']] if p['image'] else [],
                         'reactions'  : {'like': 0, 'comment': 0, 'share': 0},
-                        'post_url'   : p['postUrl'],
+                        'post_url'   : p['postUrl'] or None,
                         'posted_at'  : datetime.utcnow().isoformat(),
                     })
                 print(f'Done — found {len(posts)} posts from {base_url}')
