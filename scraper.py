@@ -8,11 +8,10 @@ from datetime import datetime
 LARAVEL_URL = os.environ.get('LARAVEL_URL', '').rstrip('/')
 IMPORT_KEY  = os.environ.get('IMPORT_KEY', '')
 FB_COOKIES  = os.environ.get('FB_COOKIES', '')
-FB_PAGES    = os.environ.get('FB_PAGES', '')   # comma-separated page usernames
+FB_PAGES    = os.environ.get('FB_PAGES', '')
 REGION      = os.environ.get('REGION', 'nacc')
 
 def parse_cookies() -> list:
-    """Convert EditThisCookie JSON array to Playwright cookie format."""
     if not FB_COOKIES:
         return []
     try:
@@ -21,11 +20,11 @@ def parse_cookies() -> list:
             cookies = []
             for c in raw:
                 cookie = {
-                    'name'   : c['name'],
-                    'value'  : c['value'],
-                    'domain' : c.get('domain', '.facebook.com'),
-                    'path'   : c.get('path', '/'),
-                    'secure' : c.get('secure', True),
+                    'name'    : c['name'],
+                    'value'   : c['value'],
+                    'domain'  : c.get('domain', '.facebook.com'),
+                    'path'    : c.get('path', '/'),
+                    'secure'  : c.get('secure', True),
                     'httpOnly': c.get('httpOnly', False),
                 }
                 cookies.append(cookie)
@@ -35,48 +34,61 @@ def parse_cookies() -> list:
         print(f'Cookie parse error: {e}')
         return []
 
+async def dismiss_popups(page):
+    """Dismiss any login popups or cookie notices."""
+    popup_selectors = [
+        '[aria-label="Close"]',
+        'div[role="dialog"] [aria-label="Close"]',
+        '[data-testid="cookie-policy-manage-dialog-accept-button"]',
+        'button[data-cookiebanner="accept_button"]',
+    ]
+    for sel in popup_selectors:
+        try:
+            el = page.locator(sel)
+            if await el.count() > 0:
+                await el.first.click(timeout=3000)
+                print(f'Dismissed popup: {sel}')
+                await page.wait_for_timeout(1500)
+        except Exception:
+            continue
+    # Press Escape as fallback
+    await page.keyboard.press('Escape')
+    await page.wait_for_timeout(1000)
+
 async def scrape_page(page, page_name: str) -> list:
-    """Scrape a Facebook public page using Playwright."""
     posts = []
 
-    # Try m.facebook.com first — simpler DOM than www
     for base_url in [f'https://m.facebook.com/{page_name}', f'https://www.facebook.com/{page_name}']:
         print(f'Trying {base_url}...')
         try:
             await page.goto(base_url, wait_until='domcontentloaded', timeout=30000)
-            await page.wait_for_timeout(5000)
+            await page.wait_for_timeout(4000)
 
-            # Scroll to trigger lazy loading
+            # Dismiss popups before scraping
+            await dismiss_popups(page)
+
+            # Scroll to load posts
             await page.evaluate('window.scrollBy(0, 1000)')
             await page.wait_for_timeout(3000)
 
-            # Save screenshot for debugging
+            # Screenshot for debugging
             await page.screenshot(path=f'/tmp/{page_name}.png')
-            print(f'Screenshot saved for {page_name}')
+            print(f'Screenshot saved')
 
-            # Get page title
             title = await page.title()
             print(f'Page title: {title}')
 
-            # Try to extract posts via JavaScript
             extracted = await page.evaluate('''() => {
                 const posts = [];
                 const results = { found: [], tried: [] };
 
-                // Try many different selectors
                 const selectors = [
-                    // m.facebook.com selectors
-                    'article',
-                    'div[data-ft]',
-                    'div._55wo',
-                    'div._1xnd',
-                    // www.facebook.com selectors
-                    'div[data-pagelet^="FeedUnit"]',
-                    'div[role="article"]',
                     'div[data-ad-preview="message"]',
-                    'div[data-testid="story-subtitled-story-container"]',
-                    // Generic
-                    'div[id^="u_0_"]',
+                    'div[role="article"]',
+                    'div[data-pagelet^="FeedUnit"]',
+                    'div[aria-posinset]',
+                    'div[data-testid="post_message"]',
+                    'div[dir="auto"]',
                 ];
 
                 for (const sel of selectors) {
@@ -84,18 +96,33 @@ async def scrape_page(page, page_name: str) -> list:
                     results.tried.push(`${sel}: ${els.length}`);
                     if (els.length > 0 && els.length < 50) {
                         results.found.push(sel);
-                        Array.from(els).slice(0, 10).forEach(item => {
+                        Array.from(els).slice(0, 10).forEach((item, idx) => {
                             const text = item.innerText ? item.innerText.trim().slice(0, 500) : '';
-                            const img  = item.querySelector('img');
+                            const img  = item.querySelector('img[src*="scontent"]') ||
+                                         item.querySelector('img[src*="fbcdn"]');
                             const link = item.querySelector('a[href*="story"]') ||
                                          item.querySelector('a[href*="posts"]') ||
                                          item.querySelector('a[href*="permalink"]');
+
+                            // Extract post ID from link
+                            let postId = '';
+                            if (link) {
+                                const href = link.href || '';
+                                const match = href.match(/story_fbid[=%](\d+)/) ||
+                                              href.match(/\/posts\/(\d+)/) ||
+                                              href.match(/permalink\/(\d+)/);
+                                postId = match ? match[1] : '';
+                            }
+                            if (!postId) {
+                                postId = `idx_${idx}_${Date.now()}`;
+                            }
+
                             if (text.length > 20 || img) {
                                 posts.push({
                                     content : text,
                                     image   : img ? img.src : null,
                                     postUrl : link ? link.href : '',
-                                    id      : Math.random().toString(36).slice(2),
+                                    id      : postId,
                                     selector: sel,
                                 });
                             }
@@ -126,8 +153,8 @@ async def scrape_page(page, page_name: str) -> list:
                         'post_url'   : p['postUrl'],
                         'posted_at'  : datetime.utcnow().isoformat(),
                     })
-                print(f'Done with {base_url} — found {len(posts)} posts')
-                break  # stop trying other URLs if we got posts
+                print(f'Done — found {len(posts)} posts from {base_url}')
+                break
 
         except Exception as e:
             print(f'Error with {base_url}: {type(e).__name__}: {e}')
@@ -137,14 +164,12 @@ async def scrape_page(page, page_name: str) -> list:
 
 
 async def send_to_laravel(posts: list) -> bool:
-    """POST scraped posts to Laravel import endpoint."""
     if not posts:
         print('No posts to send')
         return True
     if not LARAVEL_URL or not IMPORT_KEY:
         print('ERROR: LARAVEL_URL or IMPORT_KEY not set')
         return False
-
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -165,7 +190,7 @@ async def send_to_laravel(posts: list) -> bool:
 async def main():
     pages = [p.strip() for p in FB_PAGES.split(',') if p.strip()]
     if not pages:
-        print('No FB_PAGES configured, nothing to do.')
+        print('No FB_PAGES configured.')
         return
 
     print(f'Pages to scrape: {pages}')
@@ -194,7 +219,7 @@ async def main():
         for page_name in pages:
             posts = await scrape_page(page, page_name)
             all_posts.extend(posts)
-            await asyncio.sleep(2)  # small delay between pages
+            await asyncio.sleep(2)
 
         await browser.close()
 
