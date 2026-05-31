@@ -58,18 +58,19 @@ async def dismiss_popups(page):
 async def scrape_page(page, page_name: str) -> list:
     posts = []
 
-    for base_url in [f'https://m.facebook.com/{page_name}', f'https://www.facebook.com/{page_name}']:
+    for base_url in [f'https://www.facebook.com/{page_name}', f'https://m.facebook.com/{page_name}']:
         print(f'Trying {base_url}...')
         try:
             await page.goto(base_url, wait_until='domcontentloaded', timeout=30000)
-            await page.wait_for_timeout(4000)
+            await page.wait_for_timeout(5000)
 
             # Dismiss popups before scraping
             await dismiss_popups(page)
 
-            # Scroll to load posts
-            await page.evaluate('window.scrollBy(0, 1000)')
-            await page.wait_for_timeout(3000)
+            # Scroll multiple times to load more posts
+            for _ in range(3):
+                await page.evaluate('window.scrollBy(0, 800)')
+                await page.wait_for_timeout(2000)
 
             # Screenshot for debugging
             await page.screenshot(path=f'/tmp/{page_name}.png')
