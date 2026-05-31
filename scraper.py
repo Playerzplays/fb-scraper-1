@@ -133,7 +133,7 @@ async def scrape_page(page, page_name: str) -> list:
                 for (const sel of selectors) {
                     const els = document.querySelectorAll(sel);
                     results.tried.push(`${sel}: ${els.length}`);
-                    if (els.length > 0 && els.length < 50) {
+                    if (els.length > 0 && els.length < 100) {
                         results.found.push(sel);
                         Array.from(els).slice(0, 10).forEach((item, idx) => {
                             const text = item.innerText ? item.innerText.trim().slice(0, 1000) : '';
@@ -177,11 +177,17 @@ async def scrape_page(page, page_name: str) -> list:
                                 }
                             }
 
-                            // Use content hash as stable fallback ID
+                            // Use content hash as stable fallback ID — avoid btoa for non-ASCII
                             if (!postId && text) {
-                                postId = btoa(unescape(encodeURIComponent(text.slice(0, 50)))).replace(/[^a-zA-Z0-9]/g, '').slice(0, 24);
+                                // Simple hash that works with any characters
+                                let hash = 0;
+                                for (let i = 0; i < Math.min(text.length, 100); i++) {
+                                    hash = ((hash << 5) - hash) + text.charCodeAt(i);
+                                    hash |= 0;
+                                }
+                                postId = Math.abs(hash).toString(36);
                             }
-                            if (!postId) postId = `idx_${idx}`;
+                            if (!postId) postId = `idx_${idx}_${Date.now()}`;
 
                             if (text.length > 20 || image) {
                                 posts.push({
