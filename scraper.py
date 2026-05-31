@@ -46,7 +46,22 @@ def parse_cookies() -> list:
         return []
 
 async def dismiss_popups(page):
-    """Dismiss any login popups or cookie notices."""
+    """Handle Facebook popups — click Continue to log in, close others."""
+
+    # First try to click "Continue as [Name]" to actually log in
+    try:
+        continue_btn = page.locator('div[role="dialog"] div[role="button"]').first
+        if await continue_btn.count() > 0:
+            text = await continue_btn.inner_text()
+            if 'continue' in text.lower():
+                await continue_btn.click(timeout=5000)
+                print(f'Clicked login confirmation: {text}')
+                await page.wait_for_timeout(3000)
+                return
+    except Exception as e:
+        print(f'Continue button not found: {e}')
+
+    # Otherwise dismiss any other popups
     popup_selectors = [
         '[aria-label="Close"]',
         'div[role="dialog"] [aria-label="Close"]',
@@ -62,7 +77,6 @@ async def dismiss_popups(page):
                 await page.wait_for_timeout(1500)
         except Exception:
             continue
-    # Press Escape as fallback
     await page.keyboard.press('Escape')
     await page.wait_for_timeout(1000)
 
