@@ -17,8 +17,18 @@ def parse_cookies() -> list:
     try:
         raw = json.loads(FB_COOKIES)
         if isinstance(raw, list):
+            # Map EditThisCookie sameSite values to Playwright expected values
+            same_site_map = {
+                'no_restriction': 'None',
+                'lax'           : 'Lax',
+                'strict'        : 'Strict',
+                'unspecified'   : 'None',
+            }
             cookies = []
             for c in raw:
+                same_site = same_site_map.get(
+                    c.get('sameSite', 'no_restriction').lower(), 'None'
+                )
                 cookie = {
                     'name'    : c['name'],
                     'value'   : c['value'],
@@ -26,6 +36,7 @@ def parse_cookies() -> list:
                     'path'    : c.get('path', '/'),
                     'secure'  : c.get('secure', True),
                     'httpOnly': c.get('httpOnly', False),
+                    'sameSite': same_site,
                 }
                 cookies.append(cookie)
             return cookies
@@ -216,6 +227,13 @@ async def main():
             print('Cookies set on browser context')
 
         page = await context.new_page()
+
+        # Navigate to facebook.com first so cookies are applied to the right domain
+        if cookies:
+            await page.goto('https://www.facebook.com', wait_until='domcontentloaded', timeout=30000)
+            await context.add_cookies(cookies)
+            print(f'Navigated to facebook.com and set {len(cookies)} cookies')
+            await page.wait_for_timeout(2000)
 
         for page_name in pages:
             posts = await scrape_page(page, page_name)
