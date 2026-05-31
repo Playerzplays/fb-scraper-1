@@ -83,7 +83,7 @@ async def dismiss_popups(page):
 async def scrape_page(page, page_name: str) -> list:
     posts = []
 
-    for base_url in [f'https://www.facebook.com/{page_name}', f'https://m.facebook.com/{page_name}']:
+    for base_url in [f'https://m.facebook.com/{page_name}', f'https://www.facebook.com/{page_name}']:
         print(f'Trying {base_url}...')
         try:
             await page.goto(base_url, wait_until='domcontentloaded', timeout=30000)
@@ -280,13 +280,6 @@ async def main():
             print('Cookies set on browser context')
 
         page = await context.new_page()
-
-        # Navigate to facebook.com first so cookies are applied to the right domain
-        if cookies:
-            await page.goto('https://www.facebook.com', wait_until='domcontentloaded', timeout=30000)
-            await context.add_cookies(cookies)
-            print(f'Navigated to facebook.com and set {len(cookies)} cookies')
-            await page.wait_for_timeout(2000)
 
         for page_name in pages:
             posts = await scrape_page(page, page_name)
