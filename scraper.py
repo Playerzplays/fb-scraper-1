@@ -142,7 +142,7 @@ async def scrape_page(page, page_name: str) -> list:
             await page.goto(base_url, wait_until='domcontentloaded', timeout=30000)
             await page.wait_for_timeout(5000)
             await dismiss_popups(page)
-            for _ in range(3):
+            for _ in range(6):
                 await page.evaluate('window.scrollBy(0, 800)')
                 await page.wait_for_timeout(2000)
             try:
