@@ -93,7 +93,7 @@ async def scrape_page(page, page_name: str) -> list:
             await dismiss_popups(page)
 
             # Scroll multiple times to load more posts
-            for _ in range(3):
+            for _ in range(6):
                 await page.evaluate('window.scrollBy(0, 800)')
                 await page.wait_for_timeout(2000)
 
@@ -136,50 +136,61 @@ async def scrape_page(page, page_name: str) -> list:
                     if (els.length > 0 && els.length < 100) {
                         results.found.push(sel);
                         Array.from(els).slice(0, 10).forEach((item, idx) => {
-                            const text = item.innerText ? item.innerText.trim().slice(0, 1000) : '';
 
-                            // Get actual post image — exclude emoji/icon images
-                            // Real post images have width > 100 or are from specific CDN paths
+                            // Get ONLY the post message — not author/timestamp/buttons
+                            let text = '';
+                            const msgEl = item.querySelector('[data-ad-comet-preview="message"]') ||
+                                          item.querySelector('[data-ad-preview="message"]') ||
+                                          item.querySelector('div[data-testid="post_message"]');
+                            if (msgEl) {
+                                text = msgEl.innerText.trim()
+                                    .replace(/\nSee less$/,'').replace(/\nSee more$/,'').trim();
+                            }
+                            // Fallback: strip known UI noise from full innerText
+                            if (!text) {
+                                const clone = item.cloneNode(true);
+                                clone.querySelectorAll('[role="button"], form, nav').forEach(e => e.remove());
+                                const lines = (clone.innerText || '').split('\n')
+                                    .map(l => l.trim()).filter(l => l.length > 2);
+                                // Skip first line if it looks like page name / author label
+                                const start = (lines[0] === 'Author' || lines[0] === 'Sponsored') ? 2 : 1;
+                                text = lines.slice(start).join('\n').trim().slice(0, 1000);
+                            }
+
+                            // Get actual post image — skip icons/emojis/avatars
                             let image = null;
-                            const imgs = item.querySelectorAll('img[src*="scontent"], img[src*="fbcdn"]');
+                            const imgs = item.querySelectorAll('img');
                             for (const img of imgs) {
                                 const src = img.src || '';
-                                // Skip emoji and small icon images
-                                if (src.includes('emoji') || src.includes('icon') || 
+                                const alt = (img.alt || '').toLowerCase();
+                                if (src.includes('emoji') || src.includes('/icon') ||
                                     src.includes('/16/') || src.includes('/20/') ||
-                                    src.includes('/24/') || src.includes('/32/')) continue;
-                                // Prefer images with larger dimensions
-                                if (img.naturalWidth > 100 || img.width > 100 || 
-                                    src.includes('_n.') || src.includes('p720x720') ||
-                                    src.includes('p526x296') || src.includes('p480x')) {
-                                    image = src;
-                                    break;
-                                }
-                                // Accept any scontent image as fallback
-                                if (!image && src.includes('scontent')) {
-                                    image = src;
+                                    src.includes('/24/') || src.includes('/32/') ||
+                                    src.includes('/40/') || src.includes('/48/') ||
+                                    src.includes('p40x40') || src.includes('p50x50') ||
+                                    src.includes('p80x80') || src.includes('p100x100') ||
+                                    alt.includes('profile picture') || alt.includes('cover photo')) continue;
+                                if (src.includes('scontent') || src.includes('fbcdn')) {
+                                    if (img.naturalWidth > 200 || img.width > 200 ||
+                                        src.includes('p720x') || src.includes('p526x') ||
+                                        src.includes('p480x') || src.includes('_n.jpg') ||
+                                        src.includes('_n.png')) {
+                                        image = src; break;
+                                    }
+                                    if (!image) image = src;
                                 }
                             }
 
-                            // Get post URL
-                            let postUrl = '';
-                            let postId  = '';
-                            const links = item.querySelectorAll('a[href]');
-                            for (const link of links) {
+                            // Get post URL and stable ID
+                            let postUrl = '', postId = '';
+                            for (const link of item.querySelectorAll('a[href]')) {
                                 const href = link.href || '';
                                 const match = href.match(/\/posts\/(\d+)/) ||
                                               href.match(/story_fbid[=%](\d+)/) ||
                                               href.match(/permalink\/(\d+)/);
-                                if (match) {
-                                    postId  = match[1];
-                                    postUrl = href;
-                                    break;
-                                }
+                                if (match) { postId = match[1]; postUrl = href; break; }
                             }
-
-                            // Use content hash as stable fallback ID — avoid btoa for non-ASCII
                             if (!postId && text) {
-                                // Simple hash that works with any characters
                                 let hash = 0;
                                 for (let i = 0; i < Math.min(text.length, 100); i++) {
                                     hash = ((hash << 5) - hash) + text.charCodeAt(i);
@@ -190,12 +201,7 @@ async def scrape_page(page, page_name: str) -> list:
                             if (!postId) postId = `idx_${idx}_${Date.now()}`;
 
                             if (text.length > 20 || image) {
-                                posts.push({
-                                    content : text,
-                                    image   : image,
-                                    postUrl : postUrl,
-                                    id      : postId,
-                                });
+                                posts.push({ content: text, image, postUrl, id: postId });
                             }
                         });
                         if (posts.length > 0) break;
