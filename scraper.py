@@ -56,7 +56,7 @@ JS_EXTRACT = (
     "    return fallback;"
     "  }"
     "  var posts = [], tried = [];"
-    "  var selectors = ['div[role=\"article\"]','div[data-ad-preview=\"message\"]','div[data-pagelet^=\"FeedUnit\"]'];"
+    "  var selectors = ['article','div[data-ft]','div[role=\"article\"]','div[data-ad-preview=\"message\"]','div[data-pagelet^=\"FeedUnit\"]'];"
     "  for (var s = 0; s < selectors.length; s++) {"
     "    var sel = selectors[s];"
     "    var els = document.querySelectorAll(sel);"
@@ -143,7 +143,11 @@ async def dismiss_popups(page):
 
 async def scrape_page(page, page_name: str) -> list:
     posts = []
-    for base_url in [f'https://www.facebook.com/{page_name}', f'https://m.facebook.com/{page_name}']:
+    for base_url in [
+        f'https://m.facebook.com/{page_name}',
+        f'https://mbasic.facebook.com/{page_name}',
+        f'https://www.facebook.com/{page_name}',
+    ]:
         print(f'Trying {base_url}...')
         try:
             await page.goto(base_url, wait_until='domcontentloaded', timeout=30000)
