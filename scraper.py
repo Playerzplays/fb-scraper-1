@@ -62,7 +62,7 @@ JS_EXTRACT = (
     "    var els = document.querySelectorAll(sel);"
     "    tried.push(sel + ': ' + els.length);"
     "    if (els.length === 0 || els.length >= 100) continue;"
-    "    var items = Array.prototype.slice.call(els, 0, 10);"
+    "    var items = Array.prototype.slice.call(els, 0, 15);"
     "    for (var i = 0; i < items.length; i++) {"
     "      var item = items[i];"
     "      var text = (item.innerText || '').trim().substring(0, 1000);"
@@ -149,9 +149,9 @@ async def scrape_page(page, page_name: str) -> list:
             await page.goto(base_url, wait_until='domcontentloaded', timeout=30000)
             await page.wait_for_timeout(5000)
             await dismiss_popups(page)
-            for _ in range(6):
+            for _ in range(10):
                 await page.evaluate('window.scrollBy(0, 800)')
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(1500)
             try:
                 see_more = page.locator('div[role="button"]:has-text("See more")')
                 count = await see_more.count()
