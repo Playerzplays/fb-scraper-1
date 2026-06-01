@@ -17,7 +17,6 @@ def parse_cookies() -> list:
     try:
         raw = json.loads(FB_COOKIES)
         if isinstance(raw, list):
-            # Map EditThisCookie sameSite values to Playwright expected values
             same_site_map = {
                 'no_restriction': 'None',
                 'lax'           : 'Lax',
@@ -46,9 +45,6 @@ def parse_cookies() -> list:
         return []
 
 async def dismiss_popups(page):
-    """Handle Facebook popups — click Continue to log in, close others."""
-
-    # First try to click "Continue as [Name]" to actually log in
     try:
         continue_btn = page.locator('div[role="dialog"] div[role="button"]').first
         if await continue_btn.count() > 0:
@@ -61,14 +57,7 @@ async def dismiss_popups(page):
     except Exception as e:
         print(f'Continue button not found: {e}')
 
-    # Otherwise dismiss any other popups
-    popup_selectors = [
-        '[aria-label="Close"]',
-        'div[role="dialog"] [aria-label="Close"]',
-        '[data-testid="cookie-policy-manage-dialog-accept-button"]',
-        'button[data-cookiebanner="accept_button"]',
-    ]
-    for sel in popup_selectors:
+    for sel in ['[aria-label="Close"]', '[data-testid="cookie-policy-manage-dialog-accept-button"]']:
         try:
             el = page.locator(sel)
             if await el.count() > 0:
@@ -80,6 +69,134 @@ async def dismiss_popups(page):
     await page.keyboard.press('Escape')
     await page.wait_for_timeout(1000)
 
+# JavaScript to extract posts — using string methods instead of regex literals
+JS_EXTRACT = """
+() => {
+    function extractPostId(href) {
+        if (!href) return '';
+        var parts;
+        // /posts/123456
+        if (href.indexOf('/posts/') !== -1) {
+            parts = href.split('/posts/');
+            if (parts[1]) return parts[1].split('?')[0].split('/')[0].replace(/[^0-9]/g,'');
+        }
+        // story_fbid=123456 or story_fbid%3D123456
+        var fbidIdx = href.indexOf('story_fbid');
+        if (fbidIdx !== -1) {
+            var after = href.substring(fbidIdx + 10);
+            after = after.replace('%3D','=');
+            if (after[0] === '=') {
+                return after.substring(1).split('&')[0].split('%')[0].replace(/[^0-9]/g,'');
+            }
+        }
+        // /permalink/123456
+        if (href.indexOf('/permalink/') !== -1) {
+            parts = href.split('/permalink/');
+            if (parts[1]) return parts[1].split('?')[0].split('/')[0].replace(/[^0-9]/g,'');
+        }
+        return '';
+    }
+
+    function hashText(text) {
+        var hash = 0;
+        var str = text.substring(0, 100);
+        for (var i = 0; i < str.length; i++) {
+            hash = ((hash << 5) - hash) + str.charCodeAt(i);
+            hash = hash & hash;
+        }
+        return Math.abs(hash).toString(36);
+    }
+
+    function skipImage(src, alt) {
+        if (!src) return true;
+        var skipPaths = ['emoji', '/icon', '/16/', '/20/', '/24/', '/32/', '/40/', '/48/',
+                         'p40x40', 'p50x50', 'p80x80', 'p100x100'];
+        for (var i = 0; i < skipPaths.length; i++) {
+            if (src.indexOf(skipPaths[i]) !== -1) return true;
+        }
+        if (alt && (alt.toLowerCase().indexOf('profile picture') !== -1 ||
+                    alt.toLowerCase().indexOf('cover photo') !== -1)) return true;
+        return false;
+    }
+
+    var posts = [];
+    var tried = [];
+    var selectors = [
+        'div[role="article"]',
+        'div[data-ad-preview="message"]',
+        'div[data-pagelet^="FeedUnit"]',
+        'div[data-testid="post_message"]'
+    ];
+
+    for (var s = 0; s < selectors.length; s++) {
+        var sel = selectors[s];
+        var els = document.querySelectorAll(sel);
+        tried.push(sel + ': ' + els.length);
+        if (els.length > 0 && els.length < 100) {
+            var items = Array.prototype.slice.call(els, 0, 10);
+            for (var i = 0; i < items.length; i++) {
+                var item = items[i];
+
+                // Get post text — try specific message container first
+                var text = '';
+                var msgEl = item.querySelector('[data-ad-comet-preview="message"]') ||
+                            item.querySelector('[data-ad-preview="message"]') ||
+                            item.querySelector('[data-testid="post_message"]');
+                if (msgEl) {
+                    text = (msgEl.innerText || '').trim()
+                        .replace(/\\nSee less$/, '').replace(/\\nSee more$/, '').trim();
+                }
+                if (!text) {
+                    var clone = item.cloneNode(true);
+                    var btns = clone.querySelectorAll('[role="button"], form, nav, footer');
+                    for (var b = 0; b < btns.length; b++) btns[b].remove();
+                    var lines = (clone.innerText || '').split('\\n')
+                        .map(function(l){ return l.trim(); })
+                        .filter(function(l){ return l.length > 2; });
+                    var start = (lines[0] === 'Author' || lines[0] === 'Sponsored') ? 2 : 1;
+                    text = lines.slice(start).join('\\n').trim().substring(0, 1000);
+                }
+
+                // Get post image
+                var image = null;
+                var imgs = item.querySelectorAll('img');
+                for (var j = 0; j < imgs.length; j++) {
+                    var img = imgs[j];
+                    var src = img.src || '';
+                    var alt = img.alt || '';
+                    if (skipImage(src, alt)) continue;
+                    if (src.indexOf('scontent') !== -1 || src.indexOf('fbcdn') !== -1) {
+                        var isLarge = img.naturalWidth > 200 || img.width > 200 ||
+                            src.indexOf('p720x') !== -1 || src.indexOf('p526x') !== -1 ||
+                            src.indexOf('p480x') !== -1 || src.indexOf('_n.jpg') !== -1 ||
+                            src.indexOf('_n.png') !== -1;
+                        if (isLarge) { image = src; break; }
+                        if (!image) image = src;
+                    }
+                }
+
+                // Get post URL and ID
+                var postUrl = '', postId = '';
+                var links = item.querySelectorAll('a[href]');
+                for (var k = 0; k < links.length; k++) {
+                    var href = links[k].href || '';
+                    var id = extractPostId(href);
+                    if (id) { postId = id; postUrl = href; break; }
+                }
+                if (!postId && text) postId = hashText(text);
+                if (!postId) postId = 'idx_' + i + '_' + Date.now();
+
+                if (text.length > 20 || image) {
+                    posts.push({ content: text, image: image, postUrl: postUrl, id: postId });
+                }
+            }
+            if (posts.length > 0) break;
+        }
+    }
+    return { posts: posts, tried: tried };
+}
+"""
+
 async def scrape_page(page, page_name: str) -> list:
     posts = []
 
@@ -89,21 +206,19 @@ async def scrape_page(page, page_name: str) -> list:
             await page.goto(base_url, wait_until='domcontentloaded', timeout=30000)
             await page.wait_for_timeout(5000)
 
-            # Dismiss popups before scraping
             await dismiss_popups(page)
 
-            # Scroll multiple times to load more posts
-            for _ in range(6):
+            for _ in range(3):
                 await page.evaluate('window.scrollBy(0, 800)')
                 await page.wait_for_timeout(2000)
 
-            # Click all "See more" buttons to expand truncated content
+            # Click See more buttons
             try:
-                see_more_buttons = page.locator('div[role="button"]:has-text("See more"), span:has-text("See more")')
-                count = await see_more_buttons.count()
+                see_more = page.locator('div[role="button"]:has-text("See more"), span:has-text("See more")')
+                count = await see_more.count()
                 for i in range(min(count, 10)):
                     try:
-                        await see_more_buttons.nth(i).click(timeout=2000)
+                        await see_more.nth(i).click(timeout=2000)
                         await page.wait_for_timeout(500)
                     except Exception:
                         continue
@@ -111,107 +226,13 @@ async def scrape_page(page, page_name: str) -> list:
             except Exception:
                 pass
 
-            # Screenshot for debugging
             await page.screenshot(path=f'/tmp/{page_name}.png')
-            print(f'Screenshot saved')
-
             title = await page.title()
             print(f'Page title: {title}')
 
-            extracted = await page.evaluate('''() => {
-                const posts = [];
-                const results = { found: [], tried: [] };
+            extracted = await page.evaluate(JS_EXTRACT)
 
-                const selectors = [
-                    'div[role="article"]',
-                    'div[data-ad-preview="message"]',
-                    'div[data-pagelet^="FeedUnit"]',
-                    'div[aria-posinset]',
-                    'div[data-testid="post_message"]',
-                ];
-
-                for (const sel of selectors) {
-                    const els = document.querySelectorAll(sel);
-                    results.tried.push(`${sel}: ${els.length}`);
-                    if (els.length > 0 && els.length < 100) {
-                        results.found.push(sel);
-                        Array.from(els).slice(0, 10).forEach((item, idx) => {
-
-                            // Get ONLY the post message — not author/timestamp/buttons
-                            let text = '';
-                            const msgEl = item.querySelector('[data-ad-comet-preview="message"]') ||
-                                          item.querySelector('[data-ad-preview="message"]') ||
-                                          item.querySelector('div[data-testid="post_message"]');
-                            if (msgEl) {
-                                text = msgEl.innerText.trim()
-                                    .replace(/\nSee less$/,'').replace(/\nSee more$/,'').trim();
-                            }
-                            // Fallback: strip known UI noise from full innerText
-                            if (!text) {
-                                const clone = item.cloneNode(true);
-                                clone.querySelectorAll('[role="button"], form, nav').forEach(e => e.remove());
-                                const lines = (clone.innerText || '').split('\n')
-                                    .map(l => l.trim()).filter(l => l.length > 2);
-                                // Skip first line if it looks like page name / author label
-                                const start = (lines[0] === 'Author' || lines[0] === 'Sponsored') ? 2 : 1;
-                                text = lines.slice(start).join('\n').trim().slice(0, 1000);
-                            }
-
-                            // Get actual post image — skip icons/emojis/avatars
-                            let image = null;
-                            const imgs = item.querySelectorAll('img');
-                            for (const img of imgs) {
-                                const src = img.src || '';
-                                const alt = (img.alt || '').toLowerCase();
-                                if (src.includes('emoji') || src.includes('/icon') ||
-                                    src.includes('/16/') || src.includes('/20/') ||
-                                    src.includes('/24/') || src.includes('/32/') ||
-                                    src.includes('/40/') || src.includes('/48/') ||
-                                    src.includes('p40x40') || src.includes('p50x50') ||
-                                    src.includes('p80x80') || src.includes('p100x100') ||
-                                    alt.includes('profile picture') || alt.includes('cover photo')) continue;
-                                if (src.includes('scontent') || src.includes('fbcdn')) {
-                                    if (img.naturalWidth > 200 || img.width > 200 ||
-                                        src.includes('p720x') || src.includes('p526x') ||
-                                        src.includes('p480x') || src.includes('_n.jpg') ||
-                                        src.includes('_n.png')) {
-                                        image = src; break;
-                                    }
-                                    if (!image) image = src;
-                                }
-                            }
-
-                            // Get post URL and stable ID
-                            let postUrl = '', postId = '';
-                            for (const link of item.querySelectorAll('a[href]')) {
-                                const href = link.href || '';
-                                const match = href.match(/\/posts\/(\d+)/) ||
-                                              href.match(/story_fbid[=%](\d+)/) ||
-                                              href.match(/permalink\/(\d+)/);
-                                if (match) { postId = match[1]; postUrl = href; break; }
-                            }
-                            if (!postId && text) {
-                                let hash = 0;
-                                for (let i = 0; i < Math.min(text.length, 100); i++) {
-                                    hash = ((hash << 5) - hash) + text.charCodeAt(i);
-                                    hash |= 0;
-                                }
-                                postId = Math.abs(hash).toString(36);
-                            }
-                            if (!postId) postId = `idx_${idx}_${Date.now()}`;
-
-                            if (text.length > 20 || image) {
-                                posts.push({ content: text, image, postUrl, id: postId });
-                            }
-                        });
-                        if (posts.length > 0) break;
-                    }
-                }
-                return { posts, debug: results };
-            }''')
-
-            print(f'Selectors tried: {extracted["debug"]["tried"]}')
-            print(f'Selectors found: {extracted["debug"]["found"]}')
+            print(f'Selectors tried: {extracted["tried"]}')
             print(f'Posts extracted: {len(extracted["posts"])}')
 
             if extracted['posts']:
