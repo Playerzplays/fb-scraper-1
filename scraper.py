@@ -153,9 +153,21 @@ async def scrape_page(page, page_name: str) -> list:
             await page.goto(base_url, wait_until='domcontentloaded', timeout=30000)
             await page.wait_for_timeout(5000)
             await dismiss_popups(page)
-            for _ in range(10):
+            # Keep scrolling until we have 10 posts or hit max attempts
+            max_attempts = 15
+            for attempt in range(max_attempts):
                 await page.evaluate('window.scrollBy(0, 800)')
                 await page.wait_for_timeout(1500)
+                count = await page.evaluate(
+                    "(function(){ var a=document.querySelectorAll('div[role=\"article\"]').length;"
+                    " var b=document.querySelectorAll('div[data-ad-preview=\"message\"]').length;"
+                    " var c=document.querySelectorAll('article').length;"
+                    " return Math.max(a,b,c); })()"
+                )
+                print(f'Scroll {attempt+1}: {count} post elements found')
+                if count >= 10:
+                    print('Found 10+ posts, stopping scroll')
+                    break
             try:
                 see_more = page.locator('div[role="button"]:has-text("See more")')
                 count = await see_more.count()
