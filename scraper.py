@@ -56,7 +56,7 @@ JS_EXTRACT = (
     "    return fallback;"
     "  }"
     "  var posts = [], tried = [];"
-    "  var selectors = ['article','div[data-ft]','div[role=\"article\"]','div[data-ad-preview=\"message\"]','div[data-pagelet^\"FeedUnit\"]'];"
+    "  var selectors = ['article','div[data-ft]','div[role=\"article\"]','div[data-ad-preview=\"message\"]'];"
     "  for (var s = 0; s < selectors.length; s++) {"
     "    var sel = selectors[s];"
     "    var els = document.querySelectorAll(sel);"
