@@ -13,87 +13,71 @@ REGION      = os.environ.get('REGION', 'nacc')
 
 JS_EXTRACT = (
     "() => {"
-    "  function extractPostId(href) {"
-    "    if (!href) return '';"
-    "    var parts, idx, after;"
-    "    if (href.indexOf('/posts/') !== -1) {"
-    "      parts = href.split('/posts/');"
-    "      if (parts[1]) return parts[1].split('?')[0].split('/')[0].replace(/[^0-9]/g,'');"
-    "    }"
-    "    idx = href.indexOf('story_fbid');"
-    "    if (idx !== -1) {"
-    "      after = href.substring(idx + 10).replace('%3D','=');"
-    "      if (after.charAt(0) === '=') return after.substring(1).split('&')[0].replace(/[^0-9]/g,'');"
-    "    }"
-    "    if (href.indexOf('/permalink/') !== -1) {"
-    "      parts = href.split('/permalink/');"
-    "      if (parts[1]) return parts[1].split('?')[0].split('/')[0].replace(/[^0-9]/g,'');"
-    "    }"
-    "    return '';"
-    "  }"
-    "  function hashStr(text) {"
-    "    var hash = 0, str = text.substring(0, 100);"
-    "    for (var i = 0; i < str.length; i++) {"
-    "      hash = ((hash << 5) - hash) + str.charCodeAt(i); hash = hash & hash;"
-    "    }"
-    "    return Math.abs(hash).toString(36);"
-    "  }"
     "  function getBestImage(item) {"
-    "    var imgs = item.querySelectorAll('img'), fallback = null;"
-    "    for (var j = 0; j < imgs.length; j++) {"
-    "      var src = imgs[j].src || '', alt = (imgs[j].alt || '').toLowerCase();"
-    "      if (!src || src.indexOf('emoji') !== -1) continue;"
-    "      if (src.indexOf('p40x40') !== -1 || src.indexOf('p50x50') !== -1 || src.indexOf('p80x80') !== -1) continue;"
-    "      if (src.indexOf('/16/') !== -1 || src.indexOf('/20/') !== -1 || src.indexOf('/24/') !== -1 || src.indexOf('/32/') !== -1) continue;"
-    "      if (alt.indexOf('profile picture') !== -1 || alt.indexOf('cover photo') !== -1) continue;"
-    "      if (src.indexOf('scontent') !== -1 || src.indexOf('fbcdn') !== -1) {"
-    "        var large = imgs[j].naturalWidth > 200 || imgs[j].width > 200 ||"
-    "          src.indexOf('p720x') !== -1 || src.indexOf('p526x') !== -1 || src.indexOf('p480x') !== -1;"
-    "        if (large) return src;"
-    "        if (!fallback) fallback = src;"
+    "    var imgs=item.querySelectorAll('img'),fallback=null;"
+    "    for(var j=0;j<imgs.length;j++){"
+    "      var src=imgs[j].src||'',alt=(imgs[j].alt||'').toLowerCase();"
+    "      if(!src||src.indexOf('emoji')!==-1||src.indexOf('rsrc.php')!==-1) continue;"
+    "      if(src.indexOf('p40x40')!==-1||src.indexOf('p50x50')!==-1||src.indexOf('p80x80')!==-1) continue;"
+    "      if(src.indexOf('/16/')!==-1||src.indexOf('/20/')!==-1||src.indexOf('/24/')!==-1||src.indexOf('/32/')!==-1||src.indexOf('/40/')!==-1) continue;"
+    "      if(alt.indexOf('profile picture')!==-1||alt.indexOf('cover photo')!==-1) continue;"
+    "      if(src.indexOf('scontent')!==-1||src.indexOf('fbcdn')!==-1){"
+    "        var w=imgs[j].naturalWidth||imgs[j].width||0;"
+    "        if(w>200||src.indexOf('p720x')!==-1||src.indexOf('p526x')!==-1||src.indexOf('p480x')!==-1||src.indexOf('_n.jpg')!==-1) return src;"
+    "        if(!fallback) fallback=src;"
     "      }"
     "    }"
     "    return fallback;"
     "  }"
-    "  var posts = [], tried = [];"
-    "  var selectors = ['article','div[data-ft]','div[role=\"article\"]','div[data-ad-preview=\"message\"]'];"
-    "  for (var s = 0; s < selectors.length; s++) {"
-    "    var sel = selectors[s];"
-    "    var els = document.querySelectorAll(sel);"
-    "    tried.push(sel + ': ' + els.length);"
-    "    if (els.length === 0 || els.length >= 100) continue;"
-    "    var items = Array.prototype.slice.call(els, 0, 15);"
-    "    for (var i = 0; i < items.length; i++) {"
-    "      var item = items[i];"
-    "      var text = (item.innerText || '').trim().substring(0, 1000);"
-    "      if (text.substring(text.length-8) === 'See more') text = text.substring(0,text.length-8).trim();"
-    "      if (text.substring(text.length-8) === 'See less') text = text.substring(0,text.length-8).trim();"
-    "      var likeIdx = text.lastIndexOf('\\nLike');"
-    "      if (likeIdx !== -1 && likeIdx > text.length-50) text = text.substring(0,likeIdx).trim();"
-    "      if (text.indexOf('Author\\n') === 0) text = text.substring(8).trim();"
-    "      text = text.split('\\n').filter(function(l){ return l.trim() !== 'See translation' && l.trim() !== 'Rate this translation'; }).join('\\n').trim();"
-    "      var lines = text.split('\\n').filter(function(l){ return l.trim().length > 0; });"
-    "      var lastLine = lines[lines.length-1] || '';"
-    "      var tsRe = new RegExp('^[0-9]+(m|h|d|w)$');"
-    "      if (lines.length <= 3 && tsRe.test(lastLine.trim())) continue;"
-    "      var image = getBestImage(item);"
-    "      if (text.length < 40 && !image) continue;"
-    "      var postUrl = '', postId = '';"
-    "      var links = item.querySelectorAll('a[href]');"
-    "      for (var k = 0; k < links.length; k++) {"
-    "        var pid = extractPostId(links[k].href || '');"
-    "        if (pid) { postId = pid; postUrl = links[k].href; break; }"
-    "      }"
-    "      if (!postId && text) postId = hashStr(text);"
-    "      if (!postId) postId = 'fb_' + Date.now() + '_' + i;"
-    "      var dup = false;"
-    "      for (var d = 0; d < posts.length; d++) { if (posts[d].id === postId) { dup = true; break; } }"
-    "      if (!dup) posts.push({content: text, image: image, postUrl: postUrl, id: postId});"
+    "  function getDate(item){"
+    "    var abbr=item.querySelector('abbr[data-utime]');"
+    "    if(abbr){var ts=parseInt(abbr.getAttribute('data-utime'));if(ts) return new Date(ts*1000).toISOString();}"
+    "    var t=item.querySelector('time');if(t) return t.getAttribute('datetime')||'';"
+    "    return '';"
+    "  }"
+    "  function hashStr(t){var h=0;for(var i=0;i<Math.min(t.length,100);i++){h=((h<<5)-h)+t.charCodeAt(i);h=h&h;}return Math.abs(h).toString(36);}"
+    "  function getPostId(item){"
+    "    var links=item.querySelectorAll('a[href]');"
+    "    for(var k=0;k<links.length;k++){"
+    "      var href=links[k].href||'';"
+    "      if(href.indexOf('/posts/')!==-1){var p=href.split('/posts/');if(p[1]) return p[1].split('?')[0].replace(/[^0-9]/g,'');}"
+    "      var idx=href.indexOf('story_fbid');if(idx!==-1){var a=href.substring(idx+10).replace('%3D','=');if(a.charAt(0)==='=') return a.substring(1).split('&')[0].replace(/[^0-9]/g,'');}"
+    "      if(href.indexOf('/permalink/')!==-1){var p2=href.split('/permalink/');if(p2[1]) return p2[1].split('?')[0].replace(/[^0-9]/g,'');}"
+    "    }"
+    "    return '';"
+    "  }"
+    "  var posts=[],tried=[];"
+    "  var sels=['div[role=\"article\"]','article','div[data-ft]'];"
+    "  for(var s=0;s<sels.length;s++){"
+    "    var els=document.querySelectorAll(sels[s]);"
+    "    tried.push(sels[s]+': '+els.length);"
+    "    if(els.length===0||els.length>=100) continue;"
+    "    var items=Array.prototype.slice.call(els,0,15);"
+    "    for(var i=0;i<items.length;i++){"
+    "      var item=items[i];"
+    "      var image=getBestImage(item);"
+    "      var date=getDate(item);"
+    "      var text=(item.innerText||'').trim().substring(0,1500);"
+    "      if(text.substring(text.length-8)==='See more') text=text.substring(0,text.length-8).trim();"
+    "      if(text.substring(text.length-8)==='See less') text=text.substring(0,text.length-8).trim();"
+    "      if(text.indexOf('Author\\n')===0) text=text.substring(8).trim();"
+    "      text=text.split('\\n').filter(function(l){return l.trim()!=='See translation'&&l.trim()!=='Rate this translation'&&l.trim()!=='Sponsored';}).join('\\n').trim();"
+    "      var lines=text.split('\\n').filter(function(l){return l.trim().length>0;});"
+    "      var last=lines[lines.length-1]||'';"
+    "      var tsRe=new RegExp('^[0-9]+(m|h|d|w)$');"
+    "      if(lines.length<=4&&tsRe.test(last.trim())&&text.length<200) continue;"
+    "      if(text.length<30&&!image) continue;"
+    "      var postId=getPostId(item);"
+    "      if(!postId&&text) postId=hashStr(text);"
+    "      if(!postId) postId='fb_'+i+'_'+Date.now();"
+    "      var dup=false;for(var d=0;d<posts.length;d++){if(posts[d].id===postId){dup=true;break;}}"
+    "      if(!dup) posts.push({text:text,image:image,id:postId,date:date});"
     "    }"
     "  }"
-    "  return {posts: posts, tried: tried};"
+    "  return{posts:posts,tried:tried};"
     "}"
 )
+
 
 def parse_cookies() -> list:
     if not FB_COOKIES:
@@ -102,23 +86,20 @@ def parse_cookies() -> list:
         raw = json.loads(FB_COOKIES)
         if isinstance(raw, list):
             same_site_map = {'no_restriction': 'None', 'lax': 'Lax', 'strict': 'Strict', 'unspecified': 'None'}
-            cookies = []
-            for c in raw:
-                cookie = {
-                    'name'    : c['name'],
-                    'value'   : c['value'],
-                    'domain'  : c.get('domain', '.facebook.com'),
-                    'path'    : c.get('path', '/'),
-                    'secure'  : c.get('secure', True),
-                    'httpOnly': c.get('httpOnly', False),
-                    'sameSite': same_site_map.get(c.get('sameSite', 'no_restriction').lower(), 'None'),
-                }
-                cookies.append(cookie)
-            return cookies
+            return [{
+                'name'    : c['name'],
+                'value'   : c['value'],
+                'domain'  : c.get('domain', '.facebook.com'),
+                'path'    : c.get('path', '/'),
+                'secure'  : c.get('secure', True),
+                'httpOnly': c.get('httpOnly', False),
+                'sameSite': same_site_map.get(c.get('sameSite', 'no_restriction').lower(), 'None'),
+            } for c in raw if 'name' in c and 'value' in c]
         return []
     except Exception as e:
         print(f'Cookie parse error: {e}')
         return []
+
 
 async def dismiss_popups(page):
     try:
@@ -137,18 +118,17 @@ async def dismiss_popups(page):
             el = page.locator(sel)
             if await el.count() > 0:
                 await el.first.click(timeout=3000)
-                print(f'Dismissed: {sel}')
                 await page.wait_for_timeout(1500)
         except Exception:
             continue
     await page.keyboard.press('Escape')
     await page.wait_for_timeout(1000)
 
+
 async def scrape_page(page, page_name: str) -> list:
     posts = []
     for base_url in [
         f'https://m.facebook.com/{page_name}',
-        f'https://mbasic.facebook.com/{page_name}',
         f'https://www.facebook.com/{page_name}',
     ]:
         print(f'Trying {base_url}...')
@@ -156,21 +136,20 @@ async def scrape_page(page, page_name: str) -> list:
             await page.goto(base_url, wait_until='domcontentloaded', timeout=30000)
             await page.wait_for_timeout(5000)
             await dismiss_popups(page)
-            # Keep scrolling until we have 10 posts or hit max attempts
+
             max_attempts = 15
             for attempt in range(max_attempts):
                 await page.evaluate('window.scrollBy(0, 800)')
                 await page.wait_for_timeout(1500)
                 count = await page.evaluate(
-                    "(function(){ var a=document.querySelectorAll('div[role=\"article\"]').length;"
-                    " var b=document.querySelectorAll('div[data-ad-preview=\"message\"]').length;"
-                    " var c=document.querySelectorAll('article').length;"
-                    " return Math.max(a,b,c); })()"
+                    "(function(){var a=document.querySelectorAll('div[role=\"article\"]').length;"
+                    " var b=document.querySelectorAll('article').length;"
+                    " return Math.max(a,b);})()"
                 )
-                print(f'Scroll {attempt+1}: {count} post elements found')
+                print(f'Scroll {attempt+1}: {count} elements')
                 if count >= 10:
-                    print('Found 10+ posts, stopping scroll')
                     break
+
             try:
                 see_more = page.locator('div[role="button"]:has-text("See more")')
                 count = await see_more.count()
@@ -183,12 +162,15 @@ async def scrape_page(page, page_name: str) -> list:
                 print(f'Expanded {count} See more buttons')
             except Exception:
                 pass
+
             await page.screenshot(path=f'/tmp/{page_name}.png')
             title = await page.title()
             print(f'Title: {title}')
+
             extracted = await page.evaluate(JS_EXTRACT)
             print(f'Selectors: {extracted["tried"]}')
-            print(f'Posts: {len(extracted["posts"])}')
+            print(f'Posts found: {len(extracted["posts"])}')
+
             if extracted['posts']:
                 page_display_name = title.split('|')[0].strip() if '|' in title else page_name
                 for p in extracted['posts']:
@@ -198,19 +180,21 @@ async def scrape_page(page, page_name: str) -> list:
                         'region'     : REGION,
                         'page_id'    : page_name,
                         'page_name'  : page_display_name,
-                        'content'    : p['content'],
+                        'content'    : p['text'],
                         'image'      : p['image'],
                         'images'     : [p['image']] if p['image'] else [],
                         'reactions'  : {'like': 0, 'comment': 0, 'share': 0},
-                        'post_url'   : p['postUrl'] or None,
-                        'posted_at'  : datetime.utcnow().isoformat(),
+                        'post_url'   : None,
+                        'posted_at'  : p['date'] or datetime.utcnow().isoformat(),
                     })
                 print(f'Done: {len(posts)} posts from {base_url}')
                 break
+
         except Exception as e:
             print(f'Error {base_url}: {type(e).__name__}: {e}')
             continue
     return posts
+
 
 async def send_to_laravel(posts: list) -> bool:
     if not posts:
@@ -231,6 +215,7 @@ async def send_to_laravel(posts: list) -> bool:
     except Exception as e:
         print(f'Laravel error: {e}')
         return False
+
 
 async def main():
     pages = [p.strip() for p in FB_PAGES.split(',') if p.strip()]
@@ -262,6 +247,7 @@ async def main():
         await browser.close()
     print(f'Total: {len(all_posts)} posts')
     await send_to_laravel(all_posts)
+
 
 if __name__ == '__main__':
     asyncio.run(main())
